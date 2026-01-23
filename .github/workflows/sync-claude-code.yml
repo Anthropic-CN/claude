@@ -93,7 +93,7 @@ jobs:
 
           # 下载上游安装脚本
           echo "下载上游安装脚本..."
-          curl -fsSL -o install.origin.sh "https://ai.0b.nz/claude/install.sh"
+          curl -fsSL -o install.origin.sh "https://claude.ai/install.sh"
           chmod +x install.origin.sh
 
       - name: Generate modified install.sh
