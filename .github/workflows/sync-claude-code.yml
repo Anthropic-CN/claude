@@ -1,0 +1,169 @@
+name: Sync Claude Code Releases
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # 每小时检查一次
+  workflow_dispatch:      # 支持手动触发
+
+permissions:
+  contents: write  # 创建 Release 和提交代码需要写权限
+
+env:
+  GCS_BUCKET: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check for new version
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 获取上游最新版本
+          VERSION=$(curl -fsSL "$GCS_BUCKET/latest")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "检测到上游版本: $VERSION"
+
+          # 检查 Release 是否已存在
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "版本 $VERSION 已存在，跳过"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "版本 $VERSION 不存在，开始同步"
+          fi
+
+      - name: Download manifest and binaries
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -e
+          VERSION="${{ steps.check.outputs.version }}"
+
+          echo "下载 manifest.json..."
+          curl -fsSL -o manifest.json "$GCS_BUCKET/$VERSION/manifest.json"
+
+          # 动态解析平台列表
+          PLATFORMS=$(jq -r '.platforms | keys[]' manifest.json)
+          echo "支持的平台: $PLATFORMS"
+
+          # 下载各平台二进制并验证 checksum
+          for platform in $PLATFORMS; do
+            echo "下载 $platform 平台二进制..."
+            curl -fsSL -o "claude-$platform" "$GCS_BUCKET/$VERSION/$platform/claude"
+
+            # 验证 checksum
+            EXPECTED=$(jq -r ".platforms[\"$platform\"].checksum" manifest.json)
+            ACTUAL=$(sha256sum "claude-$platform" | cut -d' ' -f1)
+
+            if [ "$ACTUAL" != "$EXPECTED" ]; then
+              echo "错误: $platform 平台 checksum 不匹配"
+              echo "期望: $EXPECTED"
+              echo "实际: $ACTUAL"
+              exit 1
+            fi
+
+            echo "✓ $platform checksum 验证通过"
+          done
+
+          # 下载上游安装脚本
+          echo "下载上游安装脚本..."
+          curl -fsSL -o install.origin.sh "https://ai.0b.nz/claude/install.sh"
+          chmod +x install.origin.sh
+
+      - name: Generate modified install.sh
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -e
+
+          echo "生成修改后的安装脚本..."
+
+          # 使用 sed 替换 URL
+          sed -e 's|GCS_BUCKET="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"|GCS_BUCKET="https://github.com/'"$GITHUB_REPOSITORY"'/releases/download"|g' \
+              -e 's|"\$GCS_BUCKET/\$version/\$platform/claude"|"$GCS_BUCKET/$version/claude-$platform"|g' \
+              install.origin.sh > install.sh
+
+          chmod +x install.sh
+
+          echo "验证修改后的脚本..."
+          if ! grep -q "github.com/$GITHUB_REPOSITORY" install.sh; then
+            echo "错误: URL 替换失败"
+            exit 1
+          fi
+
+          echo "✓ 安装脚本生成成功"
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          VERSION="${{ steps.check.outputs.version }}"
+
+          # 生成 Release Notes
+          cat > RELEASE_NOTES.md <<EOF
+          # Claude Code $VERSION
+
+          同步自官方分发版本
+
+          ## 安装方法
+          \`\`\`bash
+          curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/download/$VERSION/install.sh | bash
+          \`\`\`
+
+          或使用仓库根目录的脚本：
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/install.sh | bash
+          \`\`\`
+
+          ## 支持平台
+          $(jq -r '.platforms | keys[] | "- " + .' manifest.json)
+
+          ## 文件说明
+          - \`manifest.json\` - 平台 checksum 和元数据
+          - \`claude-*\` - 各平台二进制文件
+          - \`install.origin.sh\` - 上游原始安装脚本
+          - \`install.sh\` - 修改后的安装脚本（指向 GitHub Release）
+          EOF
+
+          echo "创建 GitHub Release..."
+          gh release create "$VERSION" \
+            --title "Claude Code $VERSION" \
+            --notes-file RELEASE_NOTES.md \
+            manifest.json \
+            claude-* \
+            install.origin.sh \
+            install.sh
+
+          echo "✓ Release 创建成功: $VERSION"
+
+      - name: Commit install.sh to repository
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -e
+          VERSION="${{ steps.check.outputs.version }}"
+
+          # 配置 git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 复制修改后的脚本到仓库根目录
+          cp install.sh install.sh.new
+          mv install.sh.new install.sh
+
+          # 检查是否有变更
+          if git diff --quiet install.sh; then
+            echo "install.sh 无变更，跳过提交"
+            exit 0
+          fi
+
+          # 提交并推送
+          git add install.sh
+          git commit -m "同步安装脚本至版本 $VERSION"
+          git push
+
+          echo "✓ install.sh 已提交到仓库"
