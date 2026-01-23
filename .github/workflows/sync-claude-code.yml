@@ -104,15 +104,21 @@ jobs:
           echo "生成修改后的安装脚本..."
 
           # 使用 sed 替换 URL
-          sed -e 's|GCS_BUCKET="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"|GCS_BUCKET="https://github.com/'"$GITHUB_REPOSITORY"'/releases/download"|g' \
-              -e 's|"\$GCS_BUCKET/\$version/\$platform/claude"|"$GCS_BUCKET/$version/claude-$platform"|g' \
+          # 策略：保留 GCS_BUCKET 用于获取 /latest，添加 RELEASE_BASE 用于下载文件
+          sed -e '/^GCS_BUCKET=/a RELEASE_BASE="https://github.com/'"$GITHUB_REPOSITORY"'/releases/download"' \
+              -e 's|download_file "\$GCS_BUCKET/\$version/manifest.json"|download_file "$RELEASE_BASE/$version/manifest.json"|g' \
+              -e 's|download_file "\$GCS_BUCKET/\$version/\$platform/claude"|download_file "$RELEASE_BASE/$version/claude-$platform"|g' \
               install.origin.sh > install.sh
 
           chmod +x install.sh
 
           echo "验证修改后的脚本..."
+          if ! grep -q "RELEASE_BASE=" install.sh; then
+            echo "错误: RELEASE_BASE 变量添加失败"
+            exit 1
+          fi
           if ! grep -q "github.com/$GITHUB_REPOSITORY" install.sh; then
-            echo "错误: URL 替换失败"
+            echo "错误: GitHub URL 替换失败"
             exit 1
           fi
 
