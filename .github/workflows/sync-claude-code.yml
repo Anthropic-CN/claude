@@ -51,9 +51,22 @@ jobs:
           echo "支持的平台: $PLATFORMS"
 
           # 下载各平台二进制并验证 checksum
+          DOWNLOADED_PLATFORMS=""
           for platform in $PLATFORMS; do
+            # 先检查文件是否存在
+            URL="$GCS_BUCKET/$VERSION/$platform/claude"
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
+
+            if [ "$HTTP_CODE" = "404" ]; then
+              echo "⚠ 警告: $platform 平台二进制不存在（manifest 中有记录但上游未提供），跳过"
+              continue
+            elif [ "$HTTP_CODE" != "200" ]; then
+              echo "错误: $platform 平台返回 HTTP $HTTP_CODE"
+              exit 1
+            fi
+
             echo "下载 $platform 平台二进制..."
-            curl -fsSL -o "claude-$platform" "$GCS_BUCKET/$VERSION/$platform/claude"
+            curl -fsSL -o "claude-$platform" "$URL"
 
             # 验证 checksum
             EXPECTED=$(jq -r ".platforms[\"$platform\"].checksum" manifest.json)
@@ -67,7 +80,16 @@ jobs:
             fi
 
             echo "✓ $platform checksum 验证通过"
+            DOWNLOADED_PLATFORMS="$DOWNLOADED_PLATFORMS $platform"
           done
+
+          # 检查至少下载了一个平台
+          if [ -z "$DOWNLOADED_PLATFORMS" ]; then
+            echo "错误: 没有成功下载任何平台的二进制"
+            exit 1
+          fi
+
+          echo "成功下载的平台:$DOWNLOADED_PLATFORMS"
 
           # 下载上游安装脚本
           echo "下载上游安装脚本..."
@@ -121,7 +143,7 @@ jobs:
           \`\`\`
 
           ## 支持平台
-          $(jq -r '.platforms | keys[] | "- " + .' manifest.json)
+          $(for f in claude-*; do [ -f "$f" ] && echo "- ${f#claude-}"; done)
 
           ## 文件说明
           - \`manifest.json\` - 平台 checksum 和元数据
