@@ -10,3 +10,6 @@
 ```bash
 curl -fsSL https://github.com/Anthropic-CN/claude/releases/latest/download/install.sh | bash
 ```
+
+### 说明
+仅用于同步 Binary, 版权归 Anthropic 所有
