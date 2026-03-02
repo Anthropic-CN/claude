@@ -3,7 +3,7 @@ name: Sync Claude Code Releases
 # Resync Cron 尝试更新 Workflow 看看 Crob 是否起作用
 on:
   schedule:
-    - cron: '6 * * * *'  # 每小时检查一次
+    - cron: '9 * * * *'  # 每小时检查一次
   workflow_dispatch:      # 支持手动触发
 
 permissions:
