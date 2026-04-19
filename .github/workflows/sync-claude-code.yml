@@ -101,12 +101,14 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         run: |
           set -e
+          VERSION="${{ steps.check.outputs.version }}"
 
           echo "生成修改后的安装脚本..."
 
           # 使用 sed 替换 URL
-          # 策略：保留上游 /latest，下载 manifest 和二进制时切到 GitHub Release
-          sed -e '/^DOWNLOAD_BASE_URL=/a RELEASE_BASE="https://github.com/'"$GITHUB_REPOSITORY"'/releases/download"' \
+          # 策略：写死当前发布版本，避免运行时访问上游；manifest 和二进制统一走 GitHub Release
+          sed -e 's|^DOWNLOAD_BASE_URL=.*$|RELEASE_BASE="https://github.com/'"$GITHUB_REPOSITORY"'/releases/download"|g' \
+              -e 's|version=$(download_file "\$DOWNLOAD_BASE_URL/latest")|version="'"$VERSION"'"|g' \
               -e 's|manifest_json=$(download_file "\$DOWNLOAD_BASE_URL/\$version/manifest.json")|manifest_json=$(download_file "$RELEASE_BASE/$version/manifest.json")|g' \
               -e 's|if ! download_file "\$DOWNLOAD_BASE_URL/\$version/\$platform/claude" "\$binary_path"; then|if ! download_file "$RELEASE_BASE/$version/claude-$platform" "$binary_path"; then|g' \
               install.origin.sh > install.sh
@@ -118,6 +120,14 @@ jobs:
             echo "错误: RELEASE_BASE 变量添加失败"
             exit 1
           fi
+          if grep -Fq 'DOWNLOAD_BASE_URL=' install.sh; then
+            echo "错误: 仍然残留上游下载地址变量"
+            exit 1
+          fi
+          if ! grep -Fq "version=\"$VERSION\"" install.sh; then
+            echo "错误: 发布版本写入失败"
+            exit 1
+          fi
           if ! grep -Fq 'manifest_json=$(download_file "$RELEASE_BASE/$version/manifest.json")' install.sh; then
             echo "错误: manifest 下载地址替换失败"
             exit 1
@@ -126,8 +136,8 @@ jobs:
             echo "错误: 二进制下载地址替换失败"
             exit 1
           fi
-          if ! grep -Fq 'version=$(download_file "$DOWNLOAD_BASE_URL/latest")' install.sh; then
-            echo "错误: /latest 下载地址不应被修改"
+          if grep -Fq 'downloads.claude.ai' install.sh; then
+            echo "错误: 安装脚本不应访问上游下载域名"
             exit 1
           fi
           if ! grep -Fq "github.com/$GITHUB_REPOSITORY" install.sh; then
