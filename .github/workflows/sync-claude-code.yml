@@ -10,7 +10,7 @@ permissions:
   contents: write  # 创建 Release 和提交代码需要写权限
 
 env:
-  GCS_BUCKET: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases
+  DOWNLOAD_BASE_URL: https://downloads.claude.ai/claude-code-releases
 
 jobs:
   sync:
@@ -25,7 +25,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # 获取上游最新版本
-          VERSION=$(curl -fsSL "$GCS_BUCKET/latest")
+          VERSION=$(curl -fsSL "$DOWNLOAD_BASE_URL/latest")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "检测到上游版本: $VERSION"
 
@@ -45,7 +45,7 @@ jobs:
           VERSION="${{ steps.check.outputs.version }}"
 
           echo "下载 manifest.json..."
-          curl -fsSL -o manifest.json "$GCS_BUCKET/$VERSION/manifest.json"
+          curl -fsSL -o manifest.json "$DOWNLOAD_BASE_URL/$VERSION/manifest.json"
 
           # 动态解析平台列表
           PLATFORMS=$(jq -r '.platforms | keys[]' manifest.json)
@@ -55,7 +55,7 @@ jobs:
           DOWNLOADED_PLATFORMS=""
           for platform in $PLATFORMS; do
             # 先检查文件是否存在
-            URL="$GCS_BUCKET/$VERSION/$platform/claude"
+            URL="$DOWNLOAD_BASE_URL/$VERSION/$platform/claude"
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
 
             if [ "$HTTP_CODE" = "404" ]; then
@@ -105,23 +105,36 @@ jobs:
           echo "生成修改后的安装脚本..."
 
           # 使用 sed 替换 URL
-          # 策略：保留 GCS_BUCKET 用于获取 /latest，添加 RELEASE_BASE 用于下载文件
-          sed -e '/^GCS_BUCKET=/a RELEASE_BASE="https://github.com/'"$GITHUB_REPOSITORY"'/releases/download"' \
-              -e 's|download_file "\$GCS_BUCKET/\$version/manifest.json"|download_file "$RELEASE_BASE/$version/manifest.json"|g' \
-              -e 's|download_file "\$GCS_BUCKET/\$version/\$platform/claude"|download_file "$RELEASE_BASE/$version/claude-$platform"|g' \
+          # 策略：保留上游 /latest，下载 manifest 和二进制时切到 GitHub Release
+          sed -e '/^DOWNLOAD_BASE_URL=/a RELEASE_BASE="https://github.com/'"$GITHUB_REPOSITORY"'/releases/download"' \
+              -e 's|manifest_json=$(download_file "\$DOWNLOAD_BASE_URL/\$version/manifest.json")|manifest_json=$(download_file "$RELEASE_BASE/$version/manifest.json")|g' \
+              -e 's|if ! download_file "\$DOWNLOAD_BASE_URL/\$version/\$platform/claude" "\$binary_path"; then|if ! download_file "$RELEASE_BASE/$version/claude-$platform" "$binary_path"; then|g' \
               install.origin.sh > install.sh
 
           chmod +x install.sh
 
           echo "验证修改后的脚本..."
-          if ! grep -q "RELEASE_BASE=" install.sh; then
+          if ! grep -Fq 'RELEASE_BASE=' install.sh; then
             echo "错误: RELEASE_BASE 变量添加失败"
             exit 1
           fi
-          if ! grep -q "github.com/$GITHUB_REPOSITORY" install.sh; then
+          if ! grep -Fq 'manifest_json=$(download_file "$RELEASE_BASE/$version/manifest.json")' install.sh; then
+            echo "错误: manifest 下载地址替换失败"
+            exit 1
+          fi
+          if ! grep -Fq 'if ! download_file "$RELEASE_BASE/$version/claude-$platform" "$binary_path"; then' install.sh; then
+            echo "错误: 二进制下载地址替换失败"
+            exit 1
+          fi
+          if ! grep -Fq 'version=$(download_file "$DOWNLOAD_BASE_URL/latest")' install.sh; then
+            echo "错误: /latest 下载地址不应被修改"
+            exit 1
+          fi
+          if ! grep -Fq "github.com/$GITHUB_REPOSITORY" install.sh; then
             echo "错误: GitHub URL 替换失败"
             exit 1
           fi
+          bash -n install.sh
 
           echo "✓ 安装脚本生成成功"
 
@@ -180,18 +193,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # 复制修改后的脚本到仓库根目录
-          cp install.sh install.sh.new
-          mv install.sh.new install.sh
-
           # 检查是否有变更
-          if git diff --quiet install.sh; then
+          git add install.sh
+          if git diff --cached --quiet -- install.sh; then
             echo "install.sh 无变更，跳过提交"
             exit 0
           fi
 
           # 提交并推送
-          git add install.sh
           git commit -m "同步安装脚本至版本 $VERSION"
           git push
 
