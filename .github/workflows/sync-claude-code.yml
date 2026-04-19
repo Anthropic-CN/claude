@@ -157,11 +157,6 @@ jobs:
           curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/download/$VERSION/install.sh | bash
           \`\`\`
 
-          或使用仓库根目录的脚本：
-          \`\`\`bash
-          curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/install.sh | bash
-          \`\`\`
-
           ## 支持平台
           $(for f in claude-*; do [ -f "$f" ] && echo "- ${f#claude-}"; done)
 
@@ -182,26 +177,3 @@ jobs:
             install.sh
 
           echo "✓ Release 创建成功: $VERSION"
-
-      - name: Commit install.sh to repository
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          set -e
-          VERSION="${{ steps.check.outputs.version }}"
-
-          # 配置 git
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # 检查是否有变更
-          git add install.sh
-          if git diff --cached --quiet -- install.sh; then
-            echo "install.sh 无变更，跳过提交"
-            exit 0
-          fi
-
-          # 提交并推送
-          git commit -m "同步安装脚本至版本 $VERSION"
-          git push
-
-          echo "✓ install.sh 已提交到仓库"
